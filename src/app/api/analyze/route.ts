@@ -15,6 +15,7 @@ import { extractRequirements, judgeRequirements } from "@/lib/pipeline";
 import {
   encodeEvent,
   LIMITS,
+  USER_FACING_ERROR,
   type AnalyzeRequest,
   type ErrorKind,
   type StreamEvent,
@@ -135,14 +136,21 @@ export async function POST(request: Request): Promise<Response> {
           return;
         }
 
+        // 技术细节写进服务端日志(排错要看的是这个),
+        // 发给用户的是 USER_FACING_ERROR 里的话。
         if (err instanceof LlmError) {
-          send({ type: "error", kind: err.kind, message: err.message });
+          console.error(`[analyze] ${err.kind}: ${err.message}`);
+          send({
+            type: "error",
+            kind: err.kind,
+            message: USER_FACING_ERROR[err.kind],
+          });
         } else {
           console.error("[analyze] 未预期的错误:", err);
           send({
             type: "error",
             kind: "unknown",
-            message: "分析过程出错了,请重试。",
+            message: USER_FACING_ERROR.unknown,
           });
         }
       } finally {
