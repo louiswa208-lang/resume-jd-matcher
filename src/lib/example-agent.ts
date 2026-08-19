@@ -15,7 +15,9 @@ export type ExampleBeat =
   | { kind: "tool_call"; tool: string; label: string; wait: number }
   | { kind: "tool_result"; summary: string; ok: boolean; wait: number }
   | { kind: "score"; to: number; delta: number; wait: number }
-  | { kind: "ask"; question: string; suggested: string; wait: number };
+  | { kind: "ask"; question: string; suggested: string; wait: number }
+  /** 收尾也做成一个 beat,由回放循环驱动,不依赖 await 之后的代码 */
+  | { kind: "done"; wait: number };
 
 const ORIGINAL_ORDER =
   "负责商家后台「订单管理」模块的迭代,独立完成 6 份 PRD 并主持需求评审,累计推动 14 个需求上线";
@@ -101,6 +103,7 @@ export const EXAMPLE_AGENT_ACT_TWO: ExampleBeat[] = [
     ok: true,
     wait: 600,
   },
+  { kind: "done", wait: 600 },
 ];
 
 export const EXAMPLE_AGENT_RESULT: AgentResult = {

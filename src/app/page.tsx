@@ -368,6 +368,11 @@ export default function Page() {
             setExampleAsk({ question: beat.question, suggested: beat.suggested });
             setOptPhase("asking");
             return;
+          case "done":
+            setAgentResult(EXAMPLE_AGENT_RESULT);
+            setAgentScore(EXAMPLE_AGENT_RESULT.finalScore);
+            setOptPhase("done");
+            return;
         }
       }
     },
@@ -384,17 +389,11 @@ export default function Page() {
     await playExampleBeats(EXAMPLE_AGENT_ACT_ONE, token);
   }, [playExampleBeats]);
 
-  const continueExampleOptimize = useCallback(async () => {
-    const token = runToken.current;
+  const continueExampleOptimize = useCallback(() => {
     setExampleAsk(null);
     setOptPhase("running");
-    await playExampleBeats(EXAMPLE_AGENT_ACT_TWO, token);
-    if (runToken.current !== token) return;
-    await sleep(500);
-    if (runToken.current !== token) return;
-    setAgentResult(EXAMPLE_AGENT_RESULT);
-    setAgentScore(EXAMPLE_AGENT_RESULT.finalScore);
-    setOptPhase("done");
+    // 收尾由 ACT_TWO 里的 done beat 触发,这里不再有 await 之后的代码
+    void playExampleBeats(EXAMPLE_AGENT_ACT_TWO, runToken.current);
   }, [playExampleBeats]);
 
   const items = merge(requirements, judgments);
@@ -586,8 +585,8 @@ export default function Page() {
               question={exampleAsk.question}
               suggested={exampleAsk.suggested}
               busy={false}
-              onAnswer={() => void continueExampleOptimize()}
-              onSkip={() => void continueExampleOptimize()}
+              onAnswer={continueExampleOptimize}
+              onSkip={continueExampleOptimize}
             />
           )}
 
