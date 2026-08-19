@@ -1,7 +1,10 @@
 "use client";
 
-import { ArrowRight, CircleAlert, RotateCcw } from "lucide-react";
+import { ArrowRight, CircleAlert, RotateCcw, Sparkles } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
+import { AgentAsk } from "@/components/AgentAsk";
+import { AgentResult } from "@/components/AgentResult";
+import { AgentRun, type RunStep } from "@/components/AgentRun";
 import { ChecklistProgress } from "@/components/ChecklistProgress";
 import { ExampleInputs } from "@/components/ExampleInputs";
 import { InputForm } from "@/components/InputForm";
@@ -17,9 +20,32 @@ import {
   toDisplayStatus,
 } from "@/lib/scoring";
 import { readAnalyzeStream } from "@/lib/stream-client";
+import { runOptimizeStream } from "@/lib/optimize-client";
+import {
+  EXAMPLE_AGENT_ACT_ONE,
+  EXAMPLE_AGENT_ACT_TWO,
+  EXAMPLE_AGENT_RESULT,
+  type ExampleBeat,
+} from "@/lib/example-agent";
+import type {
+  AgentResult as AgentResultData,
+  AgentSnapshot,
+} from "@/lib/agent";
+import type { AgentMessage } from "@/lib/deepseek";
 import type { EvaluatedItem, Judgment, Requirement } from "@/lib/types";
 
 type Phase = "input" | "running" | "result";
+
+/** agent 阶段。和 Phase 独立 —— agent 是在 result 之上叠加的一层 */
+type OptimizePhase = "idle" | "running" | "asking" | "done";
+
+interface PendingAsk {
+  question: string;
+  history: AgentMessage[];
+  toolCallId: string;
+  /** 已生效的改写和累计分数,续跑时必须原样回传 */
+  snapshot: AgentSnapshot;
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -69,9 +95,31 @@ export default function Page() {
   const [resumeText, setResumeText] = useState("");
   const [supplement, setSupplement] = useState("");
 
+  // agent 相关状态。独立于匹配流程 —— 它是叠在结果页上的第二阶段
+  const [optPhase, setOptPhase] = useState<OptimizePhase>("idle");
+  const [steps, setSteps] = useState<RunStep[]>([]);
+  const [agentScore, setAgentScore] = useState(0);
+  const [ask, setAsk] = useState<PendingAsk | null>(null);
+  const [exampleAsk, setExampleAsk] = useState<{
+    question: string;
+    suggested: string;
+  } | null>(null);
+  const [agentResult, setAgentResult] = useState<AgentResultData | null>(null);
+
   // 用一个自增令牌取消上一次进行中的运行(用户连点、或中途重新开始)
   const runToken = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  const optAbortRef = useRef<AbortController | null>(null);
+
+  const resetAgent = useCallback(() => {
+    optAbortRef.current?.abort();
+    optAbortRef.current = null;
+    setOptPhase("idle");
+    setSteps([]);
+    setAsk(null);
+    setExampleAsk(null);
+    setAgentResult(null);
+  }, []);
 
   const reset = useCallback(() => {
     runToken.current += 1;
@@ -83,7 +131,8 @@ export default function Page() {
     setJudgments([]);
     setSupplement("");
     setIsExample(false);
-  }, []);
+    resetAgent();
+  }, [resetAgent]);
 
   /**
    * 示例:按真实节奏回放预置数据,不调模型。
@@ -173,6 +222,180 @@ export default function Page() {
     },
     [jdText, resumeText, requirements],
   );
+
+  /**
+   * 跑优化 agent。
+   *
+   * baselineItems / baselineScore 由调用处传入,而不是从闭包里取 ——
+   * 它们是渲染期算出来的派生值,放进依赖数组会让这个回调频繁重建。
+   *
+   * continuation 有值时表示这是「用户回答完问题后的续跑」:
+   * 带上 agent 之前的完整对话,后端从断点继续。
+   */
+  const runOptimize = useCallback(
+    async (
+      baselineItems: EvaluatedItem[],
+      baselineScore: number,
+      continuation?: {
+        history: AgentMessage[];
+        snapshot: AgentSnapshot;
+        userAnswer: string;
+        askToolCallId: string;
+      },
+    ) => {
+      optAbortRef.current?.abort();
+      const controller = new AbortController();
+      optAbortRef.current = controller;
+
+      if (!continuation) {
+        setSteps([]);
+        setAgentScore(baselineScore);
+        setAgentResult(null);
+      }
+      setAsk(null);
+      setError(null);
+      setOptPhase("running");
+
+      for await (const event of runOptimizeStream(
+        {
+          jdText,
+          resumeText,
+          requirements,
+          baselineItems,
+          baselineScore,
+          ...continuation,
+        },
+        controller.signal,
+      )) {
+        switch (event.type) {
+          case "tool_call":
+            setSteps((prev) => [...prev, { tool: event.tool, label: event.label }]);
+            break;
+
+          case "tool_result":
+            // 工具返回总是紧跟在它的调用之后,所以补到最后一条
+            setSteps((prev) => {
+              if (prev.length === 0) return prev;
+              const next = [...prev];
+              next[next.length - 1] = {
+                ...next[next.length - 1],
+                summary: event.summary,
+                ok: event.ok,
+              };
+              return next;
+            });
+            break;
+
+          case "score_change":
+            setAgentScore(event.to);
+            setSteps((prev) => {
+              if (prev.length === 0) return prev;
+              const next = [...prev];
+              next[next.length - 1] = {
+                ...next[next.length - 1],
+                delta: event.delta,
+              };
+              return next;
+            });
+            break;
+
+          case "ask_user":
+            setAsk({
+              question: event.question,
+              history: event.history,
+              toolCallId: event.toolCallId,
+              snapshot: event.snapshot,
+            });
+            setOptPhase("asking");
+            break;
+
+          case "done":
+            setAgentResult(event.result);
+            setAgentScore(event.result.finalScore);
+            setOptPhase("done");
+            break;
+
+          case "error":
+            setError({ kind: event.kind as ErrorKind, message: event.message });
+            setOptPhase("idle");
+            break;
+        }
+      }
+    },
+    [jdText, resumeText, requirements],
+  );
+
+  /**
+   * 示例的 agent 回放。不调模型,按预置脚本走。
+   * 理由见 lib/example-agent.ts —— agent 是主打功能,
+   * 面试官点示例却看不到它是最大的展示缺口。
+   */
+  const playExampleBeats = useCallback(
+    async (beats: ExampleBeat[], token: number) => {
+      for (const beat of beats) {
+        await sleep(beat.wait);
+        if (runToken.current !== token) return;
+
+        switch (beat.kind) {
+          case "tool_call":
+            setSteps((prev) => [...prev, { tool: beat.tool, label: beat.label }]);
+            break;
+          case "tool_result":
+            setSteps((prev) => {
+              if (prev.length === 0) return prev;
+              const next = [...prev];
+              next[next.length - 1] = {
+                ...next[next.length - 1],
+                summary: beat.summary,
+                ok: beat.ok,
+              };
+              return next;
+            });
+            break;
+          case "score":
+            setAgentScore(beat.to);
+            setSteps((prev) => {
+              if (prev.length === 0) return prev;
+              const next = [...prev];
+              next[next.length - 1] = {
+                ...next[next.length - 1],
+                delta: beat.delta,
+              };
+              return next;
+            });
+            break;
+          case "ask":
+            setExampleAsk({ question: beat.question, suggested: beat.suggested });
+            setOptPhase("asking");
+            return;
+        }
+      }
+    },
+    [],
+  );
+
+  const runExampleOptimize = useCallback(async () => {
+    const token = runToken.current;
+    setSteps([]);
+    setAgentScore(EXAMPLE_AGENT_RESULT.baselineScore);
+    setAgentResult(null);
+    setExampleAsk(null);
+    setOptPhase("running");
+    await playExampleBeats(EXAMPLE_AGENT_ACT_ONE, token);
+  }, [playExampleBeats]);
+
+  const continueExampleOptimize = useCallback(async () => {
+    const token = runToken.current;
+    setExampleAsk(null);
+    setOptPhase("running");
+    await playExampleBeats(EXAMPLE_AGENT_ACT_TWO, token);
+    if (runToken.current !== token) return;
+    await sleep(500);
+    if (runToken.current !== token) return;
+    setAgentResult(EXAMPLE_AGENT_RESULT);
+    setAgentScore(EXAMPLE_AGENT_RESULT.finalScore);
+    setOptPhase("done");
+  }, [playExampleBeats]);
 
   const items = merge(requirements, judgments);
   const score = computeScore(items);
@@ -313,6 +536,87 @@ export default function Page() {
             explanation={explainScore(score)}
             isExample={isExample}
           />
+
+          {/* ---------- 第二阶段:优化 Agent ---------- */}
+
+          {optPhase === "idle" && (
+            <section className="border-rule bg-surface rounded-xl border p-6 sm:p-8">
+              <h2 className="flex items-center gap-2 text-[15px] font-medium">
+                <Sparkles size={16} className="text-insufficient" aria-hidden />
+                让 AI 帮你改
+              </h2>
+              <p className="text-ink-soft mt-1.5 text-sm">
+                AI 会自己决定先改哪几条、怎么改,每改一次都用上面这个评分器重新验证。
+                改写无效时它会转而向你提问。全程只重组你简历里已有的事实,不编造经历。
+              </p>
+
+              <div className="mt-5 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() =>
+                    void (isExample
+                      ? runExampleOptimize()
+                      : runOptimize(items, score.score))
+                  }
+                  className="bg-ink text-paper inline-flex items-center gap-2 rounded-lg px-5 py-3 text-sm font-medium transition-opacity"
+                >
+                  开始优化
+                  <ArrowRight size={15} aria-hidden />
+                </button>
+                {isExample && (
+                  <span className="text-ink-faint text-xs">
+                    示例会回放一段预置的真实运行记录
+                  </span>
+                )}
+              </div>
+            </section>
+          )}
+
+          {optPhase !== "idle" && (
+            <AgentRun
+              steps={steps}
+              score={agentScore}
+              baselineScore={score.score}
+              running={optPhase === "running"}
+            />
+          )}
+
+          {optPhase === "asking" && exampleAsk && (
+            <AgentAsk
+              question={exampleAsk.question}
+              suggested={exampleAsk.suggested}
+              busy={false}
+              onAnswer={() => void continueExampleOptimize()}
+              onSkip={() => void continueExampleOptimize()}
+            />
+          )}
+
+          {optPhase === "asking" && ask && (
+            <AgentAsk
+              question={ask.question}
+              busy={false}
+              onAnswer={(answer) =>
+                void runOptimize(items, score.score, {
+                  history: ask.history,
+                  snapshot: ask.snapshot,
+                  userAnswer: answer,
+                  askToolCallId: ask.toolCallId,
+                })
+              }
+              onSkip={() =>
+                void runOptimize(items, score.score, {
+                  history: ask.history,
+                  snapshot: ask.snapshot,
+                  userAnswer: "",
+                  askToolCallId: ask.toolCallId,
+                })
+              }
+            />
+          )}
+
+          {optPhase === "done" && agentResult && (
+            <AgentResult result={agentResult} onRestart={resetAgent} />
+          )}
 
           {/* 补充信息 → 重新评估。整个闭环的收口动作 */}
           <section className="border-rule bg-surface rounded-xl border p-6 sm:p-8">

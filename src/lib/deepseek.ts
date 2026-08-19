@@ -33,6 +33,86 @@ export interface ChatMessage {
   content: string;
 }
 
+/* ------------------------------------------------------------------ */
+/* Function calling —— agent 用                                        */
+/* ------------------------------------------------------------------ */
+
+export interface ToolDefinition {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+export interface ToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+/**
+ * agent 对话里的一条消息。
+ * 比 ChatMessage 多两种形态:带 tool_calls 的 assistant 消息,
+ * 和 role 为 "tool" 的工具返回。
+ *
+ * 这个类型会**原样在前后端之间往返**(分段续跑时前端持有它),
+ * 所以字段必须是可 JSON 序列化的纯数据。
+ */
+export type AgentMessage =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
+  | { role: "tool"; tool_call_id: string; content: string };
+
+export interface AssistantTurn {
+  content: string | null;
+  toolCalls: ToolCall[];
+  /** DeepSeek 返回的结束原因,用于判断是不是因为超长被截断 */
+  finishReason: string | null;
+}
+
+/**
+ * 带工具的一次调用。不流式 —— agent 循环里我们要拿到完整的
+ * tool_calls 才能执行,流式没有意义(进度事件由循环自己产出)。
+ */
+export async function chatWithTools(
+  messages: AgentMessage[],
+  tools: ToolDefinition[],
+  opts: { maxTokens?: number; signal?: AbortSignal } = {},
+): Promise<AssistantTurn> {
+  const res = await post(
+    {
+      model: MODEL,
+      messages,
+      tools,
+      tool_choice: "auto",
+      temperature: 0,
+      max_tokens: opts.maxTokens ?? 2000,
+      stream: false,
+    },
+    opts.signal,
+  );
+
+  const data = (await res.json()) as {
+    choices?: {
+      message?: { content?: string | null; tool_calls?: ToolCall[] };
+      finish_reason?: string;
+    }[];
+  };
+
+  const choice = data.choices?.[0];
+  if (!choice?.message) {
+    throw new LlmError("upstream", "模型返回结构异常:缺少 message");
+  }
+
+  return {
+    content: choice.message.content ?? null,
+    toolCalls: choice.message.tool_calls ?? [],
+    finishReason: choice.finish_reason ?? null,
+  };
+}
+
 function apiKey(): string {
   const key = process.env.DEEPSEEK_API_KEY;
   if (!key || key.trim() === "") {

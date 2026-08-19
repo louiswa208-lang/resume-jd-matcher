@@ -15,6 +15,8 @@ import type {
   DisplayStatus,
   EvaluatedItem,
   Importance,
+  Judgment,
+  Requirement,
   Satisfaction,
   ScoreResult,
 } from "./types";
@@ -99,6 +101,30 @@ export function computeScore(items: EvaluatedItem[]): ScoreResult {
     counts,
     total: items.length,
   };
+}
+
+/**
+ * 把要求清单和判断合并成可渲染 / 可算分的条目。
+ * 还没判断到的要求不出现(流式过程中会有这种中间态)。
+ */
+export function mergeItems(
+  requirements: Requirement[],
+  judgments: Judgment[],
+): EvaluatedItem[] {
+  const byId = new Map(judgments.map((j) => [j.id, j]));
+  return requirements.flatMap((requirement) => {
+    const judgment = byId.get(requirement.id);
+    if (!judgment) return [];
+    return [
+      {
+        ...requirement,
+        satisfaction: judgment.satisfaction,
+        confidence: judgment.confidence,
+        evidence: judgment.evidence,
+        note: judgment.note,
+      },
+    ];
+  });
 }
 
 /** 已适配栏:只放明确满足的 */
