@@ -13,7 +13,21 @@
  * 换的时候只需要替换这个文件里的两个函数。
  */
 
-const DAILY_LIMIT = Number(process.env.DAILY_LIMIT_PER_IP ?? 5);
+/*
+ * 30 次是按实测成本定的,不是拍的。
+ *
+ * 实测一次完整使用(逐条匹配 + agent 优化到收尾)约:
+ *   输入 44,030 token(其中 18,048 命中缓存)+ 输出 4,497 token
+ * 其中 agent 占约 93% —— 每次 try_rewrite 都要重跑一次判断。
+ * 按 deepseek-chat 的量级折算,单次成本在一毛钱以内。
+ *
+ * 原来定 5 是上线时的保守值。真实场景是同一家公司的面试官共用一个出口 IP,
+ * 5 次很容易被前几个人用完,后面的人只能看示例 —— 这个代价比多花几块钱大得多。
+ *
+ * 注意上面那条局限:多实例下这只是软门槛,配 30 不等于上限就是 30。
+ * 成本可控靠的是单次便宜,不是限流严。
+ */
+const DAILY_LIMIT = Number(process.env.DAILY_LIMIT_PER_IP ?? 30);
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 
 interface Entry {

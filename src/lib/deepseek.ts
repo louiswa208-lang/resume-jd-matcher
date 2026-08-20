@@ -99,7 +99,9 @@ export async function chatWithTools(
       message?: { content?: string | null; tool_calls?: ToolCall[] };
       finish_reason?: string;
     }[];
+    usage?: TokenUsage;
   };
+  logUsage("agent 一轮", data.usage);
 
   const choice = data.choices?.[0];
   if (!choice?.message) {
@@ -139,6 +141,28 @@ function errorFromStatus(status: number, body: string): LlmError {
 }
 
 const TIMEOUT_MS = 90_000;
+
+/**
+ * Token 用量。只写服务端日志,不进响应体 —— 用户不需要看,
+ * 但「这个 agent 一次跑下来到底烧多少钱」是必须能回答的问题:
+ * try_rewrite 每次都要重跑一次判断,成本是随轮次线性增长的。
+ * 拍脑袋估不出来,只能量。
+ */
+export interface TokenUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
+}
+
+function logUsage(label: string, usage?: TokenUsage) {
+  if (!usage) return;
+  const hit = usage.prompt_cache_hit_tokens ?? 0;
+  const miss = usage.prompt_cache_miss_tokens ?? usage.prompt_tokens ?? 0;
+  console.log(
+    `[tokens] ${label} 输入=${usage.prompt_tokens ?? 0}(命中缓存 ${hit} / 未命中 ${miss}) 输出=${usage.completion_tokens ?? 0}`,
+  );
+}
 
 async function post(body: unknown, signal?: AbortSignal): Promise<Response> {
   const timeout = AbortSignal.timeout(TIMEOUT_MS);
@@ -195,7 +219,9 @@ export async function chatJson(
 
   const data = (await res.json()) as {
     choices?: { message?: { content?: string } }[];
+    usage?: TokenUsage;
   };
+  logUsage("抽取要求清单", data.usage);
   const content = data.choices?.[0]?.message?.content;
   if (typeof content !== "string") {
     throw new LlmError("upstream", "模型返回结构异常:缺少 content");
@@ -219,6 +245,8 @@ export async function* chatStream(
       temperature: 0,
       max_tokens: opts.maxTokens ?? 6000,
       stream: true,
+      // 流式默认不带 usage,要显式开;最后一个 chunk 才会带
+      stream_options: { include_usage: true },
     },
     opts.signal,
   );
@@ -252,7 +280,10 @@ export async function* chatStream(
         try {
           const chunk = JSON.parse(payload) as {
             choices?: { delta?: { content?: string } }[];
+            usage?: TokenUsage;
           };
+          // 带 usage 的那个 chunk 通常 choices 为空,单独处理
+          if (chunk.usage) logUsage("逐条判断", chunk.usage);
           const delta = chunk.choices?.[0]?.delta?.content;
           if (delta) yield delta;
         } catch {
