@@ -86,9 +86,10 @@ export default function Page() {
   const [stage, setStage] = useState<StreamStage>("extracting");
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [judgments, setJudgments] = useState<Judgment[]>([]);
-  const [error, setError] = useState<{ kind: ErrorKind; message: string } | null>(
-    null,
-  );
+  const [error, setError] = useState<{
+    kind: ErrorKind;
+    message: string;
+  } | null>(null);
   const [isExample, setIsExample] = useState(false);
 
   const [jdText, setJdText] = useState("");
@@ -174,7 +175,9 @@ export default function Page() {
 
   /** 真实分析:走完整的两步 pipeline */
   const runAnalysis = useCallback(
-    async (options: { reuseRequirements?: boolean; supplement?: string } = {}) => {
+    async (
+      options: { reuseRequirements?: boolean; supplement?: string } = {},
+    ) => {
       const token = ++runToken.current;
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -269,7 +272,10 @@ export default function Page() {
       )) {
         switch (event.type) {
           case "tool_call":
-            setSteps((prev) => [...prev, { tool: event.tool, label: event.label }]);
+            setSteps((prev) => [
+              ...prev,
+              { tool: event.tool, label: event.label },
+            ]);
             break;
 
           case "tool_result":
@@ -338,7 +344,10 @@ export default function Page() {
 
         switch (beat.kind) {
           case "tool_call":
-            setSteps((prev) => [...prev, { tool: beat.tool, label: beat.label }]);
+            setSteps((prev) => [
+              ...prev,
+              { tool: beat.tool, label: beat.label },
+            ]);
             break;
           case "tool_result":
             setSteps((prev) => {
@@ -365,7 +374,10 @@ export default function Page() {
             });
             break;
           case "ask":
-            setExampleAsk({ question: beat.question, suggested: beat.suggested });
+            setExampleAsk({
+              question: beat.question,
+              suggested: beat.suggested,
+            });
             setOptPhase("asking");
             return;
           case "done":
@@ -401,7 +413,8 @@ export default function Page() {
   const satisfied = items.filter(isSatisfied);
   const gaps = sortByPriority(items.filter((item) => !isSatisfied(item)));
   const insufficientCount = items.filter(
-    (item) => toDisplayStatus(item.satisfaction, item.confidence) === "insufficient",
+    (item) =>
+      toDisplayStatus(item.satisfaction, item.confidence) === "insufficient",
   ).length;
 
   return (
@@ -435,11 +448,13 @@ export default function Page() {
             </h1>
 
             <p className="text-ink-soft mt-5 max-w-2xl text-lg leading-relaxed sm:text-xl">
-              将岗位 JD 拆解为独立的任职要求,逐条核对简历是否满足,并输出匹配度与差距清单。
+              将岗位 JD 拆解为独立的任职要求,逐条核对简历是否满足;再由一个 Agent
+              自主改写简历,每次改写都用同一套评分规则验证是否真的有效。
             </p>
 
             <p className="text-ink-faint mt-4 max-w-xl text-sm">
-              每条判断标注证据来源与置信度;匹配度由固定权重规则计算,结果可复现。
+              每条判断标注证据来源与置信度;匹配度由固定权重规则计算,结果可复现
+              —— 这套规则同时是 Agent 判断改写有没有效的依据。
             </p>
 
             <div className="mt-8">
@@ -455,6 +470,39 @@ export default function Page() {
                   aria-hidden
                 />
               </button>
+            </div>
+
+            {/*
+             * 两个阶段摆在首屏,不滚动就能看见。
+             * 之前 agent 只在结果页往下滚才出现 —— 而它恰恰是这个产品
+             * 唯一算得上有门槛的部分,藏在下面等于没做。
+             */}
+            <div
+              className="border-rule mt-10 grid gap-px overflow-hidden rounded-xl border sm:grid-cols-2"
+              style={{ background: "var(--color-rule)" }}
+            >
+              <div className="bg-surface p-5">
+                <p className="text-ink-faint font-mono text-[11px]">第一阶段</p>
+                <h2 className="mt-1.5 text-[15px] font-medium">逐条匹配</h2>
+                <p className="text-ink-soft mt-1.5 text-sm leading-relaxed">
+                  把 JD 拆成要求清单,逐条判断简历是否满足,按固定权重算出匹配度。
+                </p>
+              </div>
+              <div className="bg-surface p-5">
+                <p className="text-ink-faint font-mono text-[11px]">第二阶段</p>
+                <h2 className="mt-1.5 flex items-center gap-1.5 text-[15px] font-medium">
+                  <Sparkles
+                    size={14}
+                    className="text-insufficient"
+                    aria-hidden
+                  />
+                  优化 Agent
+                </h2>
+                <p className="text-ink-soft mt-1.5 text-sm leading-relaxed">
+                  自主决定改哪几条、怎么改。每次改写都回到上一阶段的评分规则验证,
+                  分数没涨就自动回退。
+                </p>
+              </div>
             </div>
           </section>
 
@@ -536,129 +584,153 @@ export default function Page() {
             isExample={isExample}
           />
 
-          {/* ---------- 第二阶段:优化 Agent ---------- */}
+          {/*
+           * ---------- 第二阶段:优化 Agent ----------
+           *
+           * 用一条顶边 + 标签把它和上面的匹配结果隔开。
+           * 之前它和判断卡片长得一样,视觉上像「又一张卡片」——
+           * 而它是这个产品里唯一由模型自己决定控制流的部分,
+           * 层级和普通卡片相同是不对的。
+           */}
+          <div className="border-rule-strong space-y-6 border-t-2 pt-8">
+            <p className="text-ink-faint font-mono text-[11px] tracking-wide">
+              第二阶段 · 优化 AGENT
+            </p>
 
-          {optPhase === "idle" && (
+            {optPhase === "idle" && (
+              <section className="border-rule bg-surface rounded-xl border p-6 sm:p-8">
+                <h2 className="flex items-center gap-2 text-[15px] font-medium">
+                  <Sparkles
+                    size={16}
+                    className="text-insufficient"
+                    aria-hidden
+                  />
+                  让 AI 帮你改
+                </h2>
+                <p className="text-ink-soft mt-1.5 text-sm">
+                  AI
+                  会自己决定先改哪几条、怎么改,每改一次都用上面这个评分器重新验证。
+                  改写无效时它会转而向你提问。全程只重组你简历里已有的事实,不编造经历。
+                </p>
+
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void (isExample
+                        ? runExampleOptimize()
+                        : runOptimize(items, score.score))
+                    }
+                    className="bg-ink text-paper inline-flex items-center gap-2 rounded-lg px-5 py-3 text-sm font-medium transition-opacity"
+                  >
+                    开始优化
+                    <ArrowRight size={15} aria-hidden />
+                  </button>
+                  {isExample && (
+                    <span className="text-ink-faint text-xs">
+                      示例会回放一段预置的真实运行记录
+                    </span>
+                  )}
+                </div>
+              </section>
+            )}
+
+            {optPhase !== "idle" && (
+              <AgentRun
+                steps={steps}
+                score={agentScore}
+                baselineScore={score.score}
+                running={optPhase === "running"}
+              />
+            )}
+
+            {optPhase === "asking" && exampleAsk && (
+              <AgentAsk
+                question={exampleAsk.question}
+                suggested={exampleAsk.suggested}
+                busy={false}
+                onAnswer={continueExampleOptimize}
+                onSkip={continueExampleOptimize}
+              />
+            )}
+
+            {optPhase === "asking" && ask && (
+              <AgentAsk
+                question={ask.question}
+                busy={false}
+                onAnswer={(answer) =>
+                  void runOptimize(items, score.score, {
+                    history: ask.history,
+                    snapshot: ask.snapshot,
+                    userAnswer: answer,
+                    askToolCallId: ask.toolCallId,
+                  })
+                }
+                onSkip={() =>
+                  void runOptimize(items, score.score, {
+                    history: ask.history,
+                    snapshot: ask.snapshot,
+                    userAnswer: "",
+                    askToolCallId: ask.toolCallId,
+                  })
+                }
+              />
+            )}
+
+            {optPhase === "done" && agentResult && (
+              <AgentResult result={agentResult} onRestart={resetAgent} />
+            )}
+          </div>
+
+          {/*
+           * 补充信息 → 重新评估。整个闭环的收口动作。
+           *
+           * agent 运行中和提问中不显示:那两个时刻用户正在跟 agent 交互,
+           * 旁边再摆一个「补充信息重新评估」的输入框,是两套改进机制同屏抢注意力。
+           */}
+          {(optPhase === "idle" || optPhase === "done") && (
             <section className="border-rule bg-surface rounded-xl border p-6 sm:p-8">
-              <h2 className="flex items-center gap-2 text-[15px] font-medium">
-                <Sparkles size={16} className="text-insufficient" aria-hidden />
-                让 AI 帮你改
+              <h2 className="text-[15px] font-medium">
+                {insufficientCount > 0
+                  ? `有 ${insufficientCount} 条是因为简历里没提到`
+                  : "还有信息没写进简历?"}
               </h2>
               <p className="text-ink-soft mt-1.5 text-sm">
-                AI 会自己决定先改哪几条、怎么改,每改一次都用上面这个评分器重新验证。
-                改写无效时它会转而向你提问。全程只重组你简历里已有的事实,不编造经历。
+                {insufficientCount > 0
+                  ? "这些不代表你不满足,只是简历里找不到证据。补充之后重新评估,结果会更准。"
+                  : "补充任何简历里没写的经历,重新评估一次。"}
               </p>
 
-              <div className="mt-5 flex flex-wrap items-center gap-3">
+              <textarea
+                value={supplement}
+                onChange={(event) => setSupplement(event.target.value)}
+                maxLength={3000}
+                placeholder="例如:大二有一段 6 个月的 B 端产品实习,简历里没写。"
+                className="border-rule bg-paper placeholder:text-ink-faint mt-4 min-h-24 w-full resize-y rounded-lg border p-3.5 text-sm leading-relaxed"
+              />
+
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-ink-faint text-xs">
+                  {isExample
+                    ? "示例结果不支持重新评估,换成你自己的简历即可使用。"
+                    : "复用上一轮的要求清单,只重新判断,结果逐条可比。"}
+                </p>
                 <button
                   type="button"
+                  disabled={isExample || supplement.trim().length === 0}
                   onClick={() =>
-                    void (isExample
-                      ? runExampleOptimize()
-                      : runOptimize(items, score.score))
+                    void runAnalysis({
+                      reuseRequirements: true,
+                      supplement,
+                    })
                   }
-                  className="bg-ink text-paper inline-flex items-center gap-2 rounded-lg px-5 py-3 text-sm font-medium transition-opacity"
+                  className="border-ink hover:bg-ink hover:text-paper rounded-lg border px-5 py-2.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-current"
                 >
-                  开始优化
-                  <ArrowRight size={15} aria-hidden />
+                  重新评估
                 </button>
-                {isExample && (
-                  <span className="text-ink-faint text-xs">
-                    示例会回放一段预置的真实运行记录
-                  </span>
-                )}
               </div>
             </section>
           )}
-
-          {optPhase !== "idle" && (
-            <AgentRun
-              steps={steps}
-              score={agentScore}
-              baselineScore={score.score}
-              running={optPhase === "running"}
-            />
-          )}
-
-          {optPhase === "asking" && exampleAsk && (
-            <AgentAsk
-              question={exampleAsk.question}
-              suggested={exampleAsk.suggested}
-              busy={false}
-              onAnswer={continueExampleOptimize}
-              onSkip={continueExampleOptimize}
-            />
-          )}
-
-          {optPhase === "asking" && ask && (
-            <AgentAsk
-              question={ask.question}
-              busy={false}
-              onAnswer={(answer) =>
-                void runOptimize(items, score.score, {
-                  history: ask.history,
-                  snapshot: ask.snapshot,
-                  userAnswer: answer,
-                  askToolCallId: ask.toolCallId,
-                })
-              }
-              onSkip={() =>
-                void runOptimize(items, score.score, {
-                  history: ask.history,
-                  snapshot: ask.snapshot,
-                  userAnswer: "",
-                  askToolCallId: ask.toolCallId,
-                })
-              }
-            />
-          )}
-
-          {optPhase === "done" && agentResult && (
-            <AgentResult result={agentResult} onRestart={resetAgent} />
-          )}
-
-          {/* 补充信息 → 重新评估。整个闭环的收口动作 */}
-          <section className="border-rule bg-surface rounded-xl border p-6 sm:p-8">
-            <h2 className="text-[15px] font-medium">
-              {insufficientCount > 0
-                ? `有 ${insufficientCount} 条是因为简历里没提到`
-                : "还有信息没写进简历?"}
-            </h2>
-            <p className="text-ink-soft mt-1.5 text-sm">
-              {insufficientCount > 0
-                ? "这些不代表你不满足,只是简历里找不到证据。补充之后重新评估,结果会更准。"
-                : "补充任何简历里没写的经历,重新评估一次。"}
-            </p>
-
-            <textarea
-              value={supplement}
-              onChange={(event) => setSupplement(event.target.value)}
-              maxLength={3000}
-              placeholder="例如:大二有一段 6 个月的 B 端产品实习,简历里没写。"
-              className="border-rule bg-paper placeholder:text-ink-faint mt-4 min-h-24 w-full resize-y rounded-lg border p-3.5 text-sm leading-relaxed"
-            />
-
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-              <p className="text-ink-faint text-xs">
-                {isExample
-                  ? "示例结果不支持重新评估,换成你自己的简历即可使用。"
-                  : "复用上一轮的要求清单,只重新判断,结果逐条可比。"}
-              </p>
-              <button
-                type="button"
-                disabled={isExample || supplement.trim().length === 0}
-                onClick={() =>
-                  void runAnalysis({
-                    reuseRequirements: true,
-                    supplement,
-                  })
-                }
-                className="border-ink hover:bg-ink hover:text-paper rounded-lg border px-5 py-2.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-current"
-              >
-                重新评估
-              </button>
-            </div>
-          </section>
 
           {/* 待补强在前:用户最需要处理的是这些 */}
           <div className="grid gap-8 lg:grid-cols-2">

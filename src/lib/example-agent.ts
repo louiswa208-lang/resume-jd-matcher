@@ -10,6 +10,7 @@
  */
 
 import type { AgentResult } from "./agent";
+import { EXAMPLE_RESUME } from "./example";
 
 export type ExampleBeat =
   | { kind: "tool_call"; tool: string; label: string; wait: number }
@@ -31,14 +32,24 @@ const REWRITTEN_METRIC =
 
 /** 第一段:直到 agent 决定提问为止 */
 export const EXAMPLE_AGENT_ACT_ONE: ExampleBeat[] = [
-  { kind: "tool_call", tool: "get_gap_detail", label: "查看要求详情", wait: 620 },
+  {
+    kind: "tool_call",
+    tool: "get_gap_detail",
+    label: "查看要求详情",
+    wait: 620,
+  },
   {
     kind: "tool_result",
     summary: "查看要求 r5:具备供应链、仓储或物流履约类系统的产品经验",
     ok: true,
     wait: 480,
   },
-  { kind: "tool_call", tool: "get_gap_detail", label: "查看要求详情", wait: 420 },
+  {
+    kind: "tool_call",
+    tool: "get_gap_detail",
+    label: "查看要求详情",
+    wait: 420,
+  },
   {
     kind: "tool_result",
     summary: "查看要求 r8:逻辑清晰,具备较强的抽象与结构化能力",
@@ -84,12 +95,17 @@ export const EXAMPLE_AGENT_ACT_TWO: ExampleBeat[] = [
   { kind: "tool_call", tool: "try_rewrite", label: "验证改写效果", wait: 600 },
   {
     kind: "tool_result",
-    summary: "验证改写(r8):+7 分",
+    summary: "验证改写(r8):+11 分",
     ok: true,
     wait: 900,
   },
-  { kind: "score", to: 78, delta: 7, wait: 500 },
-  { kind: "tool_call", tool: "get_gap_detail", label: "查看要求详情", wait: 450 },
+  { kind: "score", to: 82, delta: 11, wait: 500 },
+  {
+    kind: "tool_call",
+    tool: "get_gap_detail",
+    label: "查看要求详情",
+    wait: 450,
+  },
   {
     kind: "tool_result",
     summary: "查看要求 r10:有对接 ERP / WMS 等外部系统经验者优先",
@@ -106,9 +122,17 @@ export const EXAMPLE_AGENT_ACT_TWO: ExampleBeat[] = [
   { kind: "done", wait: 600 },
 ];
 
+/**
+ * 这里的每个分数都由 scripts/check-example-score.ts 用真实算分器验算过。
+ * 示例是预置的,但数字不能是编的 —— 面试官照着公式验算一次就会发现。
+ *
+ * 66 → 71(r5 不满足 → 部分满足)→ 82(r8 证据不足 → 已满足)。
+ * 注意 r5 改完仍只是「部分满足」,所以它同时出现在两栏:
+ * 上面记它加了 5 分,下面记它仍未完全达标。两条都是真的。
+ */
 export const EXAMPLE_AGENT_RESULT: AgentResult = {
   baselineScore: 66,
-  finalScore: 78,
+  finalScore: 82,
   turnsUsed: 7,
   asksUsed: 1,
   effective: [
@@ -127,15 +151,35 @@ export const EXAMPLE_AGENT_RESULT: AgentResult = {
       originalText: ORIGINAL_METRIC,
       rewrittenText: REWRITTEN_METRIC,
       scoreBefore: 71,
-      scoreAfter: 78,
-      delta: 7,
+      scoreAfter: 82,
+      delta: 11,
     },
   ],
-  ineffective: [],
-  unfixable: [
+  remaining: [
+    {
+      requirementId: "r2",
+      requirementText: "3 年以上 B 端产品经验",
+      kind: "experience_gap",
+      importance: "must",
+      status: "partial",
+      reason:
+        "简历中的 B 端产品经历为 7 个月实习,与 3 年的年限要求是客观差距,改写无法弥补。",
+      interviewAdvice:
+        "不要绕开年限。用密度换年限:讲清 7 个月里独立完成 6 份 PRD、推动 14 个需求上线的节奏,再说明你已经跑通过完整的需求闭环。",
+    },
+    {
+      requirementId: "r5",
+      requirementText: "具备供应链、仓储或物流履约类系统的产品经验",
+      kind: "partially_improved",
+      importance: "must",
+      status: "partial",
+    },
     {
       requirementId: "r10",
       requirementText: "有对接 ERP / WMS 等外部系统经验者优先",
+      kind: "experience_gap",
+      importance: "nice",
+      status: "insufficient",
       reason:
         "简历与补充信息中均无 ERP 或 WMS 系统的对接经历,属于经历缺失,改写无法弥补。",
       interviewAdvice:
@@ -144,13 +188,18 @@ export const EXAMPLE_AGENT_RESULT: AgentResult = {
     {
       requirementId: "r11",
       requirementText: "持有 PMP 或供应链相关认证者优先",
+      kind: "experience_gap",
+      importance: "nice",
+      status: "insufficient",
       reason: "没有相关证书,且这是客观资质,无法通过表述解决。",
       interviewAdvice:
         "作为加分项权重较低,不建议花时间补证书;可以提及正在系统学习的供应链相关课程或知识来源。",
     },
   ],
-  finalResumeText: "",
-  summary:
-    "本次共验证 3 次改写,其中 2 次有效。r5 通过补充履约全链路的表述获得提升;r8 最初改写无效,说明差距在事实而非表述,补充你提供的拆解过程后提升 7 分。r10、r11 属于经历与资质缺失,已给出面试应对建议。",
+  // 由原始简历套用两处改写得到,不手写 —— 手写迟早会和上面的 diff 对不上
+  finalResumeText: EXAMPLE_RESUME.replace(
+    ORIGINAL_ORDER,
+    REWRITTEN_ORDER,
+  ).replace(ORIGINAL_METRIC, REWRITTEN_METRIC),
   stoppedByBudget: false,
 };

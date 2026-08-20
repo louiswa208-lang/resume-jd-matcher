@@ -19,8 +19,21 @@ import {
   type ToolDefinition,
 } from "./deepseek";
 import { judgeRequirements } from "./pipeline";
-import { computeScore, mergeItems, toDisplayStatus, WEIGHT } from "./scoring";
-import { STATUS_LABEL, type EvaluatedItem, type Judgment, type Requirement } from "./types";
+import {
+  computeScore,
+  mergeItems,
+  sortByPriority,
+  toDisplayStatus,
+  WEIGHT,
+} from "./scoring";
+import {
+  STATUS_LABEL,
+  type DisplayStatus,
+  type EvaluatedItem,
+  type Importance,
+  type Judgment,
+  type Requirement,
+} from "./types";
 
 /* ------------------------------------------------------------------ */
 /* 预算                                                                */
@@ -49,11 +62,36 @@ export interface RewriteRecord {
   delta: number;
 }
 
-export interface UnfixableItem {
+/**
+ * 一条要求「还没解决」的原因。
+ *
+ * 四类都要呈现,而不是只报经历缺失:用户问的是「我还差什么」,
+ * 只列模型主动标记的那几条会让剩下的差距凭空消失 ——
+ * 界面上显示 82 分,却数不出扣掉的 18 分在哪。
+ */
+export type RemainingKind =
+  /**
+   * 改写确实加了分,但这条仍未**完全**满足。
+   * 例:要求「供应链系统经验」,改写后从不满足升到部分满足 ——
+   * 有提升是真的,没满足也是真的,两栏都要出现才诚实。
+   */
+  | "partially_improved"
+  /** 模型判定属于经历缺失,改简历解决不了 */
+  | "experience_gap"
+  /** 试过改写,算分器验证没有提升 —— 说明差的是事实不是表述 */
+  | "rewrite_failed"
+  /** 本轮压根没动过(优先级靠后,或预算先用尽了) */
+  | "not_attempted";
+
+export interface RemainingItem {
   requirementId: string;
   requirementText: string;
-  reason: string;
-  interviewAdvice: string;
+  kind: RemainingKind;
+  importance: Importance;
+  status: DisplayStatus;
+  /** 仅 experience_gap 有:模型给出的原因与面试应对建议 */
+  reason?: string;
+  interviewAdvice?: string;
 }
 
 export interface AgentResult {
@@ -61,15 +99,15 @@ export interface AgentResult {
   finalScore: number;
   turnsUsed: number;
   asksUsed: number;
-  /** 经算分器验证确实提升的改写 */
+  /** 经算分器验证确实提升的改写 —— 结论页第一块,可直接照着改 */
   effective: RewriteRecord[];
-  /** 尝试过但没有提升的 —— 诚实保留,它证明提升是验证出来的 */
-  ineffective: RewriteRecord[];
-  /** 改简历解决不了的(经历缺失类) */
-  unfixable: UnfixableItem[];
-  /** 应用了全部有效改写后的简历,供用户对照 */
+  /**
+   * 优化后仍未满足的全部要求 —— 结论页第二块。
+   * 由算分器统一算出,所以条数和最终分数永远对得上。
+   */
+  remaining: RemainingItem[];
+  /** 应用了全部有效改写后的简历,供用户整份复制 */
   finalResumeText: string;
-  summary: string;
   /** 预算耗尽被迫收尾,而不是模型自己判断结束 */
   stoppedByBudget: boolean;
 }
@@ -206,14 +244,12 @@ const TOOLS: ToolDefinition[] = [
     function: {
       name: "finish",
       description:
-        "结束优化并输出结论。当你判断剩余可改项的预期收益已经很低时主动调用,不必用尽预算。",
+        "结束优化。当你判断剩余可改项的预期收益已经很低时主动调用,不必用尽预算。" +
+        "不需要写总结 —— 改了什么、涨了多少分、还差哪几条,系统会自己根据验证记录列出来。" +
+        "你唯一需要提供的是:哪些要求属于经历缺失,以及面试时该怎么应对。",
       parameters: {
         type: "object",
         properties: {
-          summary: {
-            type: "string",
-            description: "一段话总结这次优化做了什么、效果如何",
-          },
           unfixable: {
             type: "array",
             description:
@@ -232,7 +268,9 @@ const TOOLS: ToolDefinition[] = [
             },
           },
         },
-        required: ["summary"],
+        // 必填,即使是空数组:强迫模型明确表态哪些是经历缺失,
+        // 而不是默认省略 —— 面试应对建议是这个字段唯一的来源。
+        required: ["unfixable"],
       },
     },
   },
@@ -318,7 +356,8 @@ async function rescore(
 /* ------------------------------------------------------------------ */
 
 function describeItem(item: EvaluatedItem): string {
-  const status = STATUS_LABEL[toDisplayStatus(item.satisfaction, item.confidence)];
+  const status =
+    STATUS_LABEL[toDisplayStatus(item.satisfaction, item.confidence)];
   return [
     `要求 ${item.id}:${item.text}`,
     `分类:${item.category} | 权重:${WEIGHT[item.importance]}(${
@@ -556,8 +595,7 @@ export async function* runAgent(
   }
 
   let stoppedByBudget = false;
-  let summary = "";
-  let unfixable: UnfixableItem[] = [];
+  let declared: UnfixableDeclaration[] = [];
 
   while (state.budget.turns < BUDGET.maxTurns) {
     // 预算提示以 system 消息注入,和任务内容分开
@@ -590,23 +628,7 @@ export async function* runAgent(
       yield { type: "tool_call", tool: name, label: TOOL_LABEL[name] ?? name };
 
       if (name === "finish") {
-        summary = String(args.summary ?? "");
-        const raw = Array.isArray(args.unfixable) ? args.unfixable : [];
-        unfixable = raw.flatMap((u): UnfixableItem[] => {
-          if (typeof u !== "object" || u === null) return [];
-          const o = u as Record<string, unknown>;
-          const id = String(o.requirement_id ?? "");
-          const requirement = requirements.find((r) => r.id === id);
-          if (!requirement) return [];
-          return [
-            {
-              requirementId: id,
-              requirementText: requirement.text,
-              reason: String(o.reason ?? ""),
-              interviewAdvice: String(o.interview_advice ?? ""),
-            },
-          ];
-        });
+        declared = parseUnfixable(args.unfixable, requirements);
         // 补一条结果事件,否则界面上这一步会一直停在「进行中」
         yield {
           type: "tool_result",
@@ -616,7 +638,7 @@ export async function* runAgent(
         };
         yield {
           type: "done",
-          result: buildResult(input, state, summary, unfixable, false),
+          result: buildResult(input, state, declared, false),
         };
         return;
       }
@@ -658,7 +680,13 @@ export async function* runAgent(
         return;
       }
 
-      const outcome = await executeTool(name, args, state, requirements, signal);
+      const outcome = await executeTool(
+        name,
+        args,
+        state,
+        requirements,
+        signal,
+      );
       messages.push({
         role: "tool",
         tool_call_id: call.id,
@@ -680,30 +708,91 @@ export async function* runAgent(
   stoppedByBudget = true;
   yield {
     type: "done",
-    result: buildResult(
-      input,
-      state,
-      summary || "已达到本次优化的轮次上限,以下是已验证有效的改动。",
-      unfixable,
-      stoppedByBudget,
-    ),
+    result: buildResult(input, state, declared, stoppedByBudget),
   };
+}
+
+/** 模型在 finish 里申报的「经历缺失」条目,是面试应对建议的唯一来源 */
+interface UnfixableDeclaration {
+  requirementId: string;
+  reason: string;
+  interviewAdvice: string;
+}
+
+function parseUnfixable(
+  raw: unknown,
+  requirements: Requirement[],
+): UnfixableDeclaration[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((u): UnfixableDeclaration[] => {
+    if (typeof u !== "object" || u === null) return [];
+    const o = u as Record<string, unknown>;
+    const id = String(o.requirement_id ?? "");
+    // 编号对不上就丢弃 —— 宁可少一条建议,也不要凭空造一条要求
+    if (!requirements.some((r) => r.id === id)) return [];
+    return [
+      {
+        requirementId: id,
+        reason: String(o.reason ?? ""),
+        interviewAdvice: String(o.interview_advice ?? ""),
+      },
+    ];
+  });
 }
 
 function buildResult(
   input: AgentInput,
   state: RunState,
-  summary: string,
-  unfixable: UnfixableItem[],
+  declared: UnfixableDeclaration[],
   stoppedByBudget: boolean,
 ): AgentResult {
-  // 同一条要求可能先失败后成功(比如问过用户之后再改就成了)。
-  // 那种情况下它在结果里应该只算「有效」——
-  // 同时出现在两栏会让人以为系统自相矛盾。
-  const succeeded = new Set(state.effective.map((r) => r.requirementId));
-  const ineffective = state.ineffective.filter(
-    (r) => !succeeded.has(r.requirementId),
-  );
+  const gapById = new Map(declared.map((d) => [d.requirementId, d]));
+  const improved = new Set(state.effective.map((r) => r.requirementId));
+  const triedAndFailed = new Set(state.ineffective.map((r) => r.requirementId));
+
+  /*
+   * 判定顺序是有讲究的:**算分器的记录优先于模型的说法**。
+   * 一条要求如果确实被改写加过分,不管模型在 finish 里怎么说,
+   * 它都是「已提升、仍有差距」,而不是「经历缺失」——
+   * 前者有验证记录支撑,后者只是模型的判断。
+   */
+  const kindOf = (id: string): RemainingKind =>
+    improved.has(id)
+      ? "partially_improved"
+      : gapById.has(id)
+        ? "experience_gap"
+        : triedAndFailed.has(id)
+          ? "rewrite_failed"
+          : "not_attempted";
+
+  /*
+   * 「还没解决的」以**算分器的最终判定**为准,而不是把模型说的话抄一遍。
+   *
+   * 这样有两个好处:
+   *   1. 条数和分数天然一致 —— 界面上的 94 分,扣掉的那些能一条条数出来。
+   *   2. 同一条要求先失败后成功(问过用户再改就成了)的情况自动消失:
+   *      它已经 met,根本不会进这个列表,不会出现自相矛盾的两栏。
+   */
+  const remaining = sortByPriority(
+    state.items.filter(
+      (item) => toDisplayStatus(item.satisfaction, item.confidence) !== "met",
+    ),
+  ).map((item): RemainingItem => {
+    const kind = kindOf(item.id);
+    const gap = gapById.get(item.id);
+    return {
+      requirementId: item.id,
+      requirementText: item.text,
+      kind,
+      importance: item.importance,
+      status: toDisplayStatus(item.satisfaction, item.confidence),
+      // 面试建议只在模型确实把它当经历缺口时才给 ——
+      // 一条刚被改写提升过的要求,配一段「面试怎么圆场」是自相矛盾的
+      reason: kind === "experience_gap" ? gap?.reason : undefined,
+      interviewAdvice:
+        kind === "experience_gap" ? gap?.interviewAdvice : undefined,
+    };
+  });
 
   return {
     baselineScore: input.baselineScore,
@@ -711,10 +800,8 @@ function buildResult(
     turnsUsed: state.budget.turns,
     asksUsed: state.budget.asks,
     effective: state.effective,
-    ineffective,
-    unfixable,
+    remaining,
     finalResumeText: state.resumeText,
-    summary,
     stoppedByBudget,
   };
 }
