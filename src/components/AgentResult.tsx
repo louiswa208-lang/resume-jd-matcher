@@ -18,6 +18,8 @@
 
 import {
   Check,
+  ChevronDown,
+  ChevronUp,
   CircleAlert,
   Clock,
   Copy,
@@ -113,38 +115,114 @@ function overview(result: Result): string {
 /* 第一块:照着改                                                       */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 复制改好的简历全文。
+ *
+ * 三层降级,因为 navigator.clipboard 会在好几种正常情况下直接抛错:
+ * 页面失焦、用户拒绝权限、被 iframe 的 Permissions Policy 挡住、非安全上下文。
+ * 早期版本只做了第一层,失败时弹一句「浏览器拒绝了剪贴板权限」——
+ * 那是把问题原样丢回给用户,等于没给出路。
+ *
+ *   1. navigator.clipboard.writeText —— 首选
+ *   2. execCommand("copy") —— 已废弃但兼容面广得多,很多失败场景它反而能成
+ *   3. 都不行就把全文摊开并全选,用户自己按 Ctrl+C
+ *
+ * 「展开全文」也做成常驻入口:不该只有复制失败时才能看到完整结果。
+ */
 function CopyResume({ text }: { text: string }) {
-  const [state, setState] = useState<"idle" | "ok" | "fail">("idle");
+  const [copied, setCopied] = useState(false);
+  /** 记的是「为什么展开」:用户自己点开的,还是复制失败兜底摊出来的 */
+  const [open, setOpen] = useState<false | "manual" | "fallback">(false);
+
+  function flash() {
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2400);
+  }
+
+  /** 老办法:塞一个临时 textarea 选中再 execCommand */
+  function legacyCopy(): boolean {
+    try {
+      const el = document.createElement("textarea");
+      el.value = text;
+      el.setAttribute("readonly", "");
+      // 放在视口外但不能 display:none —— 隐藏元素选不中
+      el.style.position = "fixed";
+      el.style.top = "-1000px";
+      el.style.opacity = "0";
+      document.body.appendChild(el);
+      el.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(el);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
 
   async function copy() {
     try {
       await navigator.clipboard.writeText(text);
-      setState("ok");
+      flash();
+      return;
     } catch {
-      // 非 HTTPS、或用户拒绝了剪贴板权限 —— 不假装成功
-      setState("fail");
+      // 继续往下降级,不在这里报错
     }
-    setTimeout(() => setState("idle"), 2400);
+    if (legacyCopy()) {
+      flash();
+      return;
+    }
+    // 两条路都不通:摊开全文并全选,把动作交还给用户。
+    // 选中交给 textarea 的 autoFocus + onFocus 做 —— 声明式,
+    // 不用去猜 ref 什么时候挂上、effect 跑几遍。
+    setOpen("fallback");
   }
 
   return (
-    <div className="mt-4 flex flex-wrap items-center gap-3">
-      <button
-        type="button"
-        onClick={() => void copy()}
-        className="border-rule-strong hover:border-ink inline-flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm transition-colors"
-      >
-        {state === "ok" ? (
-          <Check size={14} className="text-met" aria-hidden />
-        ) : (
-          <Copy size={14} aria-hidden />
-        )}
-        {state === "ok" ? "已复制" : "复制改好的简历全文"}
-      </button>
-      {state === "fail" && (
-        <span className="text-ink-faint text-xs">
-          浏览器拒绝了剪贴板权限,请手动选中上面的改写内容复制。
-        </span>
+    <div className="mt-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={() => void copy()}
+          className="border-rule-strong hover:border-ink inline-flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm transition-colors"
+        >
+          {copied ? (
+            <Check size={14} className="text-met" aria-hidden />
+          ) : (
+            <Copy size={14} aria-hidden />
+          )}
+          {copied ? "已复制" : "复制改好的简历全文"}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setOpen((v) => (v ? false : "manual"))}
+          className="text-ink-soft hover:text-ink -mx-1 inline-flex items-center gap-1.5 px-1 py-2 text-sm underline underline-offset-2"
+        >
+          {open ? (
+            <ChevronUp size={14} aria-hidden />
+          ) : (
+            <ChevronDown size={14} aria-hidden />
+          )}
+          {open ? "收起全文" : "展开全文"}
+        </button>
+      </div>
+
+      {open && (
+        <div className="mt-3">
+          <textarea
+            readOnly
+            // 兜底展开时自动聚焦并全选;用户自己点「展开全文」时不抢焦点
+            autoFocus={open === "fallback"}
+            value={text}
+            onFocus={(event) => event.currentTarget.select()}
+            className="border-rule bg-paper h-64 w-full resize-y rounded-lg border p-3.5 font-mono text-xs leading-relaxed"
+          />
+          <p className="text-ink-faint mt-1.5 text-xs">
+            {open === "fallback"
+              ? "浏览器不让网页写剪贴板,已经帮你全选好了 —— 按 Ctrl+C(Mac 为 ⌘+C)即可。"
+              : "点进文本框会自动全选,按 Ctrl+C(Mac 为 ⌘+C)复制。"}
+          </p>
+        </div>
       )}
     </div>
   );
