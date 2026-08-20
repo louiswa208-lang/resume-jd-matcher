@@ -1,6 +1,13 @@
 "use client";
 
-import { CircleAlert, LoaderCircle, ShieldCheck, Upload } from "lucide-react";
+import {
+  CircleAlert,
+  ClipboardList,
+  FileUser,
+  LoaderCircle,
+  ShieldCheck,
+  Upload,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import { extractPdfText } from "@/lib/pdf";
 import { LIMITS } from "@/lib/protocol";
@@ -57,7 +64,11 @@ export function InputForm({
     <div className="grid gap-5 lg:grid-cols-2">
       {/* 岗位描述 */}
       <div className="flex flex-col">
-        <label htmlFor="jd" className="text-sm font-medium">
+        <label
+          htmlFor="jd"
+          className="flex items-center gap-1.5 text-sm font-medium"
+        >
+          <ClipboardList size={15} className="text-ink-faint" aria-hidden />
           岗位描述
         </label>
         <p className="text-ink-faint mt-1 text-xs">
@@ -78,7 +89,11 @@ export function InputForm({
 
       {/* 简历 */}
       <div className="flex flex-col">
-        <label htmlFor="resume" className="text-sm font-medium">
+        <label
+          htmlFor="resume"
+          className="flex items-center gap-1.5 text-sm font-medium"
+        >
+          <FileUser size={15} className="text-ink-faint" aria-hidden />
           你的简历
         </label>
         <p className="text-ink-faint mt-1 text-xs">

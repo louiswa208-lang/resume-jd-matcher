@@ -14,13 +14,17 @@
  */
 
 import {
+  Briefcase,
   Check,
   CircleQuestionMark,
+  GraduationCap,
+  MessagesSquare,
   Minus,
+  Wrench,
   X,
   type LucideIcon,
 } from "lucide-react";
-import type { DisplayStatus } from "@/lib/types";
+import type { DisplayStatus, RequirementCategory } from "@/lib/types";
 
 export interface StatusMeta {
   label: string;
@@ -40,7 +44,7 @@ export interface StatusMeta {
 export const STATUS_META: Record<DisplayStatus, StatusMeta> = {
   met: {
     label: "已满足",
-    hint: "简历中有直接证据",
+    hint: "简历中有可核验的事实佐证",
     Icon: Check,
     fg: "text-met",
     bg: "bg-met-bg",
@@ -80,3 +84,17 @@ export const IMPORTANCE_LABEL = {
   must: "硬性要求",
   nice: "加分项",
 } as const;
+
+/**
+ * 要求分类的图标。
+ *
+ * 加它是因为四种分类在卡片上只是四个词,扫读时区分不开;
+ * 换成图标之后,「这一栏差的全是经验类」这种事一眼就能看出来 ——
+ * 图标在这里承担信息,不是装饰。
+ */
+export const CATEGORY_ICON: Record<RequirementCategory, LucideIcon> = {
+  硬性资格: GraduationCap,
+  专业技能: Wrench,
+  经验: Briefcase,
+  软性素质: MessagesSquare,
+};

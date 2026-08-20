@@ -21,7 +21,7 @@ import {
 import { judgeRequirements } from "./pipeline";
 import {
   computeScore,
-  mergeItems,
+  requirementWeightPoints,
   sortByPriority,
   toDisplayStatus,
   WEIGHT,
@@ -60,6 +60,12 @@ export interface RewriteRecord {
   scoreBefore: number;
   scoreAfter: number;
   delta: number;
+  /**
+   * 这条要求按权重折算成多少分。
+   * 「+27」单看像是瞎给的,配上「这条权重 27 分」就是「从 0 补到满」——
+   * 同一个数字,可信度完全不同。
+   */
+  weightPoints: number;
 }
 
 /**
@@ -306,6 +312,10 @@ function systemPrompt(): string {
 
 - **严禁编造经历、数字、公司名、成果。** 改写只能重组、强调、具体化简历中**已经存在**的事实,或整合用户通过 ask_user 明确提供的信息。
 - 违反这条会让整个产品失去意义 —— 用户拿着编造的简历去面试会当场穿帮。
+- **加形容词不算改写。** 往简历里塞一句"具备较强的 X 能力""对 Y 有强烈兴趣"是没用的:
+  评分器只认可核验的事实(具体项目、数字、时间、成果),自我评价最高只能拿到 medium 置信度。
+  想让一条软性素质要求真正达标,唯一的办法是找到简历里能说明这项能力的**具体事情**并讲清楚;
+  简历里确实没有这样的事情时,用 ask_user 去问,而不是替用户写一句漂亮话。
 - 每一轮都必须调用至少一个工具。不要只输出文字而不调用工具。`;
 }
 
@@ -335,19 +345,57 @@ interface RunState {
 }
 
 /** 重新逐条判断并算分。只跑第二步 —— 要求清单不随简历变化,没必要重抽 */
-async function rescore(
+/**
+ * 改写后重新评分 —— **只重判被改的那一条**。
+ *
+ * 早期版本每次改写都重跑整份清单,分差因此被污染:模型对其它要求的判断
+ * 本身带随机性,那部分抖动会被算到这次改写头上。真实运行里出现过
+ *「一条权重 11 分的要求,改写后涨了 16 分」—— 多出来的 5 分来自别处,
+ * 界面却把它记成这次改写的功劳。
+ *
+ * reward function 必须只反映**这一个动作**的效果,否则 agent 学到的是噪声。
+ * 顺带:每次验证从判断 12 条变成判断 1 条,这是全流程最大的成本项。
+ *
+ * 代价:一次改写如果顺带帮到了别的要求,这里看不见。
+ * 可接受 —— 宁可低估,也不要把噪声当成果。
+ */
+async function rescoreOne(
   resumeText: string,
   requirements: Requirement[],
+  targetId: string,
+  current: EvaluatedItem[],
   signal?: AbortSignal,
-): Promise<{ score: number; items: EvaluatedItem[] }> {
-  const judgments: Judgment[] = [];
-  for await (const judgment of judgeRequirements(
-    { resumeText, requirements },
-    signal,
-  )) {
-    judgments.push(judgment);
+): Promise<{ score: number; items: EvaluatedItem[] } | null> {
+  const target = requirements.filter((r) => r.id === targetId);
+  if (target.length === 0) return null;
+
+  const fresh: Judgment[] = [];
+  try {
+    for await (const judgment of judgeRequirements(
+      { resumeText, requirements: target },
+      signal,
+    )) {
+      fresh.push(judgment);
+    }
+  } catch {
+    // 只判一条时上游抖一下就会整条失败。让这次工具调用失败、
+    // 由模型自己决定重试还是换条路,比中断整轮 agent 好。
+    return null;
   }
-  const items = mergeItems(requirements, judgments);
+  if (fresh.length === 0) return null;
+
+  const byId = new Map(fresh.map((j) => [j.id, j]));
+  const items = current.map((item) => {
+    const j = byId.get(item.id);
+    if (!j) return item;
+    return {
+      ...item,
+      satisfaction: j.satisfaction,
+      confidence: j.confidence,
+      evidence: j.evidence,
+      note: j.note,
+    };
+  });
   return { score: computeScore(items).score, items };
 }
 
@@ -461,15 +509,31 @@ async function executeTool(
 
     state.budget.rewrites += 1;
     const candidate = state.resumeText.replace(original, rewritten);
-    const { score: newScore, items: newItems } = await rescore(
+    const rescored = await rescoreOne(
       candidate,
       requirements,
+      requirementId,
+      state.items,
       signal,
     );
+    if (!rescored) {
+      return {
+        toModel: `无法对 ${requirementId} 重新评分(编号不存在,或本次判断失败)。请确认编号无误后重试,或换一条要求。`,
+        summary: `验证改写(${requirementId}):评分失败`,
+        ok: false,
+      };
+    }
+    const { score: newScore, items: newItems } = rescored;
 
     const before = state.score;
     const delta = newScore - before;
     const requirement = requirements.find((r) => r.id === requirementId);
+    // 这条要求按权重折算的分值。要求条数少时单条能值二三十分,
+    // 不给参照系的话「+27」看着像瞎给的,给了就是「从 0 分补到满」。
+    const weightPoints = requirementWeightPoints(
+      newItems,
+      requirement?.importance ?? "nice",
+    );
     const record: RewriteRecord = {
       requirementId,
       requirementText: requirement?.text ?? requirementId,
@@ -478,6 +542,7 @@ async function executeTool(
       scoreBefore: before,
       scoreAfter: newScore,
       delta,
+      weightPoints,
     };
 
     if (delta > 0) {
@@ -487,8 +552,8 @@ async function executeTool(
       state.score = newScore;
       state.effective.push(record);
       return {
-        toModel: `改写有效。匹配度 ${before} → ${newScore}(+${delta})。改动已保留,后续在此基础上继续。`,
-        summary: `验证改写(${requirementId}):+${delta} 分`,
+        toModel: `改写有效。匹配度 ${before} → ${newScore}(+${delta};这条要求按权重折算值 ${weightPoints} 分)。改动已保留,后续在此基础上继续。`,
+        summary: `验证改写(${requirementId}):+${delta} 分 / 这条权重 ${weightPoints} 分`,
         ok: true,
         scoreChange: { from: before, to: newScore, delta },
       };

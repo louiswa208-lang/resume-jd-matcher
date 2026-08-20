@@ -9,11 +9,22 @@
  */
 
 import { EXAMPLE_JUDGMENTS, EXAMPLE_REQUIREMENTS } from "../src/lib/example";
-import { computeScore, mergeItems } from "../src/lib/scoring";
+import { computeScore, mergeItems, scoreResolution } from "../src/lib/scoring";
 import type { Judgment } from "../src/lib/types";
 
-const baseline = computeScore(mergeItems(EXAMPLE_REQUIREMENTS, EXAMPLE_JUDGMENTS));
+const baseItems = mergeItems(EXAMPLE_REQUIREMENTS, EXAMPLE_JUDGMENTS);
+const baseline = computeScore(baseItems);
 console.log("基线分数:", baseline.score, "| 条数:", baseline.total);
+
+const res = scoreResolution(baseItems);
+console.log(
+  "分值:硬性要求每条",
+  res.mustPoints,
+  "分,加分项每条",
+  res.nicePoints,
+  "分 | 需要提示分辨率过粗:",
+  res.coarse,
+);
 
 /** 把某条要求的判断替换掉,重新算分 —— 和 try_rewrite 做的事一样 */
 function after(patches: Record<string, Partial<Judgment>>) {
@@ -51,4 +62,19 @@ const remaining = finalItems.filter(
 console.log(
   "仍未满足:",
   remaining.map((i) => `${i.id}(${i.importance})`).join("、"),
+);
+
+// 要求条数很少时,单条硬性要求的分值会大到让分数失去意义 —— 界面要提示。
+// 这里用一份人造的短清单验证阈值确实会翻转。
+const tiny = EXAMPLE_REQUIREMENTS.slice(0, 4).map((r) => ({
+  ...r,
+  satisfaction: "unmet" as const,
+  confidence: "high" as const,
+  evidence: null,
+  note: "",
+}));
+const tinyRes = scoreResolution(tiny);
+console.log(
+  `短 JD(${tiny.length} 条):硬性要求每条 ${tinyRes.mustPoints} 分 | 触发提示:`,
+  tinyRes.coarse,
 );

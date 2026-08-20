@@ -167,9 +167,15 @@ function Rewrite({ item }: { item: Result["effective"][number] }) {
             为了满足:{item.requirementText}
           </h4>
         </div>
-        <span className="bg-met-bg text-met shrink-0 rounded-full px-2.5 py-1 font-mono text-xs font-medium">
-          +{item.delta} 分
-        </span>
+        {/* 配上满分才有参照系 —— 单独一个「+27」看着像瞎给的 */}
+        <div className="shrink-0 text-right">
+          <span className="bg-met-bg text-met inline-block rounded-full px-2.5 py-1 font-mono text-xs font-medium">
+            +{item.delta} 分
+          </span>
+          <p className="text-ink-faint mt-1 font-mono text-[10px]">
+            这条权重 {item.weightPoints} 分
+          </p>
+        </div>
       </div>
 
       {/* 摊开,不折叠 —— 这一段就是「该改哪里」的答案本身 */}

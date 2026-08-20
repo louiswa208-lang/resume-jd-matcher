@@ -104,6 +104,68 @@ export function computeScore(items: EvaluatedItem[]): ScoreResult {
 }
 
 /**
+ * 分数的**分辨率**:一条要求究竟值多少分。
+ *
+ * 存在的理由:分母是所有要求的权重之和,所以要求条数越少,单条越值钱。
+ * 一份只抽出 4 条要求的 JD,一条硬性要求能值 27 分 ——
+ * 用户看到「改了一句话涨了 27 分」的第一反应是这分数很好糊弄,
+ * 而实际上那是算对的。
+ *
+ * 与其压住波动(平滑会让分数不再能用一个公式解释清楚,
+ * 而可解释是这个产品的立身之本),不如**把分值摆到台面上**:
+ * 标出每条值多少分,+27 就从"离谱"变成"算得出来"。
+ *
+ * 这和置信度刻意不用百分比是同一条原则 —— 不做假精确。
+ */
+export interface ScoreResolution {
+  /** 一条硬性要求折算成多少分 */
+  mustPoints: number;
+  /** 一条加分项折算成多少分 */
+  nicePoints: number;
+  /**
+   * 单条硬性要求分值过大 —— 要求太少,分数波动会很剧烈,不适合当精确数字看。
+   * 阈值 15 分对应总权重 20,大致是 6 条硬性要求上下。
+   */
+  coarse: boolean;
+}
+
+const COARSE_THRESHOLD = 15;
+
+/**
+ * 取整而不保留小数:总分本来就是整数,给出「10.7 分」是假精确 ——
+ * 和置信度刻意不用百分比是同一条原则。
+ *
+ * 注意这里说的是**权重折算的分值**,不是「这条最多能涨几分」。
+ * 分差由两个取整后的总分相减得到,可能比它多 1 或少 1,这是取整的正常结果,
+ * 所以对外的措辞是「这条权重 N 分」而不是「满分 N 分」。
+ */
+export function scoreResolution(items: EvaluatedItem[]): ScoreResolution {
+  const possible = items.reduce(
+    (sum, item) => sum + (WEIGHT[item.importance] ?? WEIGHT.nice),
+    0,
+  );
+  if (possible === 0) {
+    return { mustPoints: 0, nicePoints: 0, coarse: false };
+  }
+  const per = (weight: number) => Math.round((weight / possible) * 100);
+  const mustPoints = per(WEIGHT.must);
+  return {
+    mustPoints,
+    nicePoints: per(WEIGHT.nice),
+    coarse: mustPoints > COARSE_THRESHOLD,
+  };
+}
+
+/** 单条要求折算成多少分 —— 用于把 agent 的「+N 分」放回可比的尺度上 */
+export function requirementWeightPoints(
+  items: EvaluatedItem[],
+  importance: Importance,
+): number {
+  const r = scoreResolution(items);
+  return importance === "must" ? r.mustPoints : r.nicePoints;
+}
+
+/**
  * 把要求清单和判断合并成可渲染 / 可算分的条目。
  * 还没判断到的要求不出现(流式过程中会有这种中间态)。
  */

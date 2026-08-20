@@ -11,7 +11,8 @@
  * 页面上的视觉张力只放在这一处,其它地方保持安静。
  */
 
-import { WEIGHT, toDisplayStatus } from "@/lib/scoring";
+import { TriangleAlert } from "lucide-react";
+import { scoreResolution, WEIGHT, toDisplayStatus } from "@/lib/scoring";
 import type { DisplayStatus, EvaluatedItem, ScoreResult } from "@/lib/types";
 import { STATUS_META } from "./status";
 
@@ -42,6 +43,7 @@ export function ScoreBoard({ items, score, explanation, isExample }: Props) {
     (sum, s) => sum + (WEIGHT[s.item.importance] ?? WEIGHT.nice),
     0,
   );
+  const resolution = scoreResolution(items);
 
   return (
     <section className="border-rule bg-surface rounded-xl border p-6 sm:p-8">
@@ -83,12 +85,29 @@ export function ScoreBoard({ items, score, explanation, isExample }: Props) {
           })}
         </div>
 
+        {/*
+         * 把「一条值多少分」直接标出来。
+         * 分母是权重之和,所以要求越少单条越值钱 —— 不标的话,
+         * 用户看到 agent「改一句话涨 27 分」只会觉得这分数很好糊弄。
+         */}
         <p className="text-ink-faint mt-2 font-mono text-[11px]">
-          每段 = 一条要求,宽度 = 权重(硬性要求 3,加分项 1)
+          每段 = 一条要求,宽度 = 权重 · 共 {score.total} 条,硬性要求每条{" "}
+          {resolution.mustPoints} 分,加分项每条 {resolution.nicePoints} 分
         </p>
       </div>
 
       <p className="text-ink-soft mt-5 text-sm">{explanation}</p>
+
+      {resolution.coarse && (
+        <p className="text-partial bg-partial-tint border-partial/25 mt-3 flex items-start gap-2 rounded-lg border p-3 text-xs">
+          <TriangleAlert size={13} className="mt-0.5 shrink-0" aria-hidden />
+          <span>
+            这份 JD 只识别出 {score.total} 条要求,单条硬性要求就值{" "}
+            {resolution.mustPoints} 分 —— 分数会随一两条判断大幅跳动,
+            不适合当精确数字看,请结合下面的逐条判断一起读。
+          </span>
+        </p>
+      )}
 
       {/* 图例 */}
       <ul className="border-rule mt-5 flex flex-wrap gap-x-5 gap-y-2 border-t pt-4">

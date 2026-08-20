@@ -16,7 +16,7 @@
 import { Quote } from "lucide-react";
 import { toDisplayStatus } from "@/lib/scoring";
 import type { EvaluatedItem } from "@/lib/types";
-import { IMPORTANCE_LABEL, STATUS_META } from "./status";
+import { CATEGORY_ICON, IMPORTANCE_LABEL, STATUS_META } from "./status";
 
 interface Props {
   item: EvaluatedItem;
@@ -30,6 +30,7 @@ export function RequirementCard({ item, delayMs = 0, compact = false }: Props) {
   const status = toDisplayStatus(item.satisfaction, item.confidence);
   const meta = STATUS_META[status];
   const { Icon } = meta;
+  const CategoryIcon = CATEGORY_ICON[item.category];
 
   return (
     <article
@@ -44,9 +45,12 @@ export function RequirementCard({ item, delayMs = 0, compact = false }: Props) {
       />
 
       <header className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="text-ink-faint font-mono text-[11px]">{item.id}</span>
-          <span className="text-ink-faint text-[11px]">
+        <div className="text-ink-faint flex min-w-0 items-center gap-1.5">
+          <span className="font-mono text-[11px]">{item.id}</span>
+          {CategoryIcon && (
+            <CategoryIcon size={12} className="shrink-0" aria-hidden />
+          )}
+          <span className="text-[11px]">
             {IMPORTANCE_LABEL[item.importance]} · {item.category}
           </span>
         </div>

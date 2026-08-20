@@ -1,6 +1,16 @@
 "use client";
 
-import { ArrowRight, CircleAlert, RotateCcw, Sparkles } from "lucide-react";
+import {
+  ArrowRight,
+  ArrowUpRight,
+  CircleAlert,
+  CircleCheck,
+  ListChecks,
+  Lock,
+  MessageSquarePlus,
+  RotateCcw,
+  Sparkles,
+} from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { AgentAsk } from "@/components/AgentAsk";
 import { AgentResult } from "@/components/AgentResult";
@@ -483,7 +493,10 @@ export default function Page() {
             >
               <div className="bg-surface p-5">
                 <p className="text-ink-faint font-mono text-[11px]">第一阶段</p>
-                <h2 className="mt-1.5 text-[15px] font-medium">逐条匹配</h2>
+                <h2 className="mt-1.5 flex items-center gap-1.5 text-[15px] font-medium">
+                  <ListChecks size={14} className="text-met" aria-hidden />
+                  逐条匹配
+                </h2>
                 <p className="text-ink-soft mt-1.5 text-sm leading-relaxed">
                   把 JD 拆成要求清单,逐条判断简历是否满足,按固定权重算出匹配度。
                 </p>
@@ -690,7 +703,12 @@ export default function Page() {
            */}
           {(optPhase === "idle" || optPhase === "done") && (
             <section className="border-rule bg-surface rounded-xl border p-6 sm:p-8">
-              <h2 className="text-[15px] font-medium">
+              <h2 className="flex items-center gap-2 text-[15px] font-medium">
+                <MessageSquarePlus
+                  size={16}
+                  className="text-insufficient"
+                  aria-hidden
+                />
                 {insufficientCount > 0
                   ? `有 ${insufficientCount} 条是因为简历里没提到`
                   : "还有信息没写进简历?"}
@@ -736,9 +754,10 @@ export default function Page() {
           <div className="grid gap-8 lg:grid-cols-2">
             <section>
               <h2 className="flex items-center gap-2 text-[15px] font-medium">
-                <span
-                  className="h-3.5 w-1 rounded-full"
-                  style={{ background: "var(--color-unmet)" }}
+                <ArrowUpRight
+                  size={17}
+                  className="text-unmet"
+                  strokeWidth={2.5}
                   aria-hidden
                 />
                 待补强
@@ -767,9 +786,10 @@ export default function Page() {
 
             <section>
               <h2 className="flex items-center gap-2 text-[15px] font-medium">
-                <span
-                  className="h-3.5 w-1 rounded-full"
-                  style={{ background: "var(--color-met)" }}
+                <CircleCheck
+                  size={17}
+                  className="text-met"
+                  strokeWidth={2.5}
                   aria-hidden
                 />
                 已适配
@@ -800,7 +820,8 @@ export default function Page() {
       )}
 
       <footer className="border-rule text-ink-faint mt-20 border-t pt-6 text-xs">
-        <p>
+        <p className="flex items-start gap-1.5">
+          <Lock size={12} className="mt-0.5 shrink-0" aria-hidden />
           简历文件在浏览器本地解析,不上传、不存储。分数由固定规则计算,
           模型只负责逐条判断。
         </p>

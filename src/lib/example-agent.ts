@@ -10,7 +10,12 @@
  */
 
 import type { AgentResult } from "./agent";
-import { EXAMPLE_RESUME } from "./example";
+import {
+  EXAMPLE_JUDGMENTS,
+  EXAMPLE_REQUIREMENTS,
+  EXAMPLE_RESUME,
+} from "./example";
+import { mergeItems, requirementWeightPoints } from "./scoring";
 
 export type ExampleBeat =
   | { kind: "tool_call"; tool: string; label: string; wait: number }
@@ -19,6 +24,16 @@ export type ExampleBeat =
   | { kind: "ask"; question: string; suggested: string; wait: number }
   /** 收尾也做成一个 beat,由回放循环驱动,不依赖 await 之后的代码 */
   | { kind: "done"; wait: number };
+
+/**
+ * 示例 JD 共 12 条要求(8 条硬性 + 4 条加分),总权重 28,
+ * 所以一条硬性要求折算 round(3/28×100) = 11 分。
+ * 不写死数字是为了让它跟着示例数据变 —— check-example-score.ts 会验算。
+ */
+const MUST_POINTS = requirementWeightPoints(
+  mergeItems(EXAMPLE_REQUIREMENTS, EXAMPLE_JUDGMENTS),
+  "must",
+);
 
 const ORIGINAL_ORDER =
   "负责商家后台「订单管理」模块的迭代,独立完成 6 份 PRD 并主持需求评审,累计推动 14 个需求上线";
@@ -144,6 +159,7 @@ export const EXAMPLE_AGENT_RESULT: AgentResult = {
       scoreBefore: 66,
       scoreAfter: 71,
       delta: 5,
+      weightPoints: MUST_POINTS,
     },
     {
       requirementId: "r8",
@@ -153,6 +169,7 @@ export const EXAMPLE_AGENT_RESULT: AgentResult = {
       scoreBefore: 71,
       scoreAfter: 82,
       delta: 11,
+      weightPoints: MUST_POINTS,
     },
   ],
   remaining: [
